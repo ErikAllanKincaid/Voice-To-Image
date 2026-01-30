@@ -17,51 +17,71 @@ from PIL import Image
 from scipy.io import wavfile
 
 # Config
-WHISPER_MODEL = "base"
-OLLAMA_MODEL = "llama3.2"
-SD_MODEL = "stabilityai/sd-turbo"
 SAMPLE_RATE = 16000
 DEFAULT_CHROMECAST = "Living Room TV"  # Set to None to require explicit device
 
+# Model presets
+PRESETS = {
+    "lite": {
+        "whisper": "tiny",
+        "ollama": "llama3.2:1b",
+        "sd": "stabilityai/sd-turbo",
+        "sd_steps": 4,
+    },
+    "standard": {
+        "whisper": "base",
+        "ollama": "llama3.2",
+        "sd": "stabilityai/sd-turbo",
+        "sd_steps": 4,
+    },
+    "high": {
+        "whisper": "medium",
+        "ollama": "llama3.2",
+        "sd": "stabilityai/stable-diffusion-xl-base-1.0",
+        "sd_steps": 30,
+    },
+}
+DEFAULT_PRESET = "standard"
+
 app = FastAPI(title="Voice-to-Image API")
 
-# Global models (loaded on first use)
-_whisper_model = None
-_sd_pipe = None
+# Global models (loaded on first use, keyed by model name)
+_whisper_models = {}
+_sd_pipes = {}
 
 
-def get_whisper():
-    global _whisper_model
-    if _whisper_model is None:
-        print("Loading Whisper model...")
-        _whisper_model = WhisperModel(
-            WHISPER_MODEL,
+def get_whisper(model_name: str = "base"):
+    global _whisper_models
+    if model_name not in _whisper_models:
+        print(f"Loading Whisper model: {model_name}...")
+        _whisper_models[model_name] = WhisperModel(
+            model_name,
             device="cuda" if torch.cuda.is_available() else "cpu"
         )
-    return _whisper_model
+    return _whisper_models[model_name]
 
 
-def get_sd_pipe():
-    global _sd_pipe
-    if _sd_pipe is None:
-        print("Loading Stable Diffusion model...")
-        _sd_pipe = StableDiffusionPipeline.from_pretrained(
-            SD_MODEL,
+def get_sd_pipe(model_id: str = "stabilityai/sd-turbo"):
+    global _sd_pipes
+    if model_id not in _sd_pipes:
+        print(f"Loading Stable Diffusion model: {model_id}...")
+        _sd_pipes[model_id] = StableDiffusionPipeline.from_pretrained(
+            model_id,
             torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
         )
         if torch.cuda.is_available():
-            _sd_pipe = _sd_pipe.to("cuda")
-    return _sd_pipe
+            _sd_pipes[model_id] = _sd_pipes[model_id].to("cuda")
+    return _sd_pipes[model_id]
 
 
-def transcribe_audio(audio: np.ndarray) -> str:
+def transcribe_audio(audio: np.ndarray, whisper_model: str = "base") -> str:
     """Transcribe audio using faster-whisper."""
     # Save to temp WAV for faster-whisper
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
         wavfile.write(f.name, SAMPLE_RATE, (audio * 32767).astype(np.int16))
         temp_path = f.name
 
-    model = get_whisper()
+    model = get_whisper(whisper_model)
     segments, _ = model.transcribe(temp_path)
     text = " ".join(seg.text for seg in segments).strip()
 
@@ -69,7 +89,7 @@ def transcribe_audio(audio: np.ndarray) -> str:
     return text
 
 
-def refine_prompt(text: str) -> str:
+def refine_prompt(text: str, ollama_model: str = "llama3.2") -> str:
     """Use Ollama to convert speech to an image generation prompt."""
     system = """You are a prompt engineer for image generation.
 Convert the user's spoken description into a concise, vivid image prompt.
@@ -77,7 +97,7 @@ Focus on visual details: subject, style, lighting, colors, composition.
 Output ONLY the prompt, nothing else. Keep it under 77 tokens."""
 
     response = ollama.chat(
-        model=OLLAMA_MODEL,
+        model=ollama_model,
         messages=[
             {"role": "system", "content": system},
             {"role": "user", "content": text},
@@ -86,10 +106,13 @@ Output ONLY the prompt, nothing else. Keep it under 77 tokens."""
     return response["message"]["content"].strip()
 
 
-def generate_image(prompt: str, width: int = 768, height: int = 432) -> Image.Image:
+def generate_image(prompt: str, width: int = 768, height: int = 432,
+                   sd_model: str = "stabilityai/sd-turbo", sd_steps: int = 4) -> Image.Image:
     """Generate image using Stable Diffusion."""
-    pipe = get_sd_pipe()
-    image = pipe(prompt, num_inference_steps=4, guidance_scale=0.0, width=width, height=height).images[0]
+    pipe = get_sd_pipe(sd_model)
+    # sd-turbo uses guidance_scale=0, others use 7.5
+    guidance = 0.0 if "turbo" in sd_model else 7.5
+    image = pipe(prompt, num_inference_steps=sd_steps, guidance_scale=guidance, width=width, height=height).images[0]
     return image
 
 
@@ -176,6 +199,7 @@ async def api_pipeline(
     audio: UploadFile = File(...),
     cast: bool = Form(False),
     device: str = Form(None),
+    preset: str = Form("standard"),
     size: str = Form("768x432"),
 ):
     """Full pipeline: audio → transcribe → refine → generate → (optional) cast."""
@@ -184,6 +208,9 @@ async def api_pipeline(
         width, height = map(int, size.split("x"))
     except ValueError:
         width, height = 768, 432
+
+    # Get preset config
+    config = PRESETS.get(preset, PRESETS[DEFAULT_PRESET])
     content = await audio.read()
 
     # Parse WAV
@@ -205,12 +232,13 @@ async def api_pipeline(
         data = signal.resample(data, int(len(data) * SAMPLE_RATE / sr))
 
     # Pipeline
-    text = transcribe_audio(data)
+    text = transcribe_audio(data, whisper_model=config["whisper"])
     if not text:
         raise HTTPException(400, "No speech detected")
 
-    prompt = refine_prompt(text)
-    image = generate_image(prompt, width=width, height=height)
+    prompt = refine_prompt(text, ollama_model=config["ollama"])
+    image = generate_image(prompt, width=width, height=height,
+                           sd_model=config["sd"], sd_steps=config["sd_steps"])
 
     # Cast if requested
     if cast:
@@ -244,9 +272,9 @@ async def api_cast(image: UploadFile = File(...), device: str = Form(None)):
 @app.post("/unload")
 def unload_models():
     """Unload models to free VRAM."""
-    global _whisper_model, _sd_pipe
-    _whisper_model = None
-    _sd_pipe = None
+    global _whisper_models, _sd_pipes
+    _whisper_models.clear()
+    _sd_pipes.clear()
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
     return {"status": "models unloaded"}

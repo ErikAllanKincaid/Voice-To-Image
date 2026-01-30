@@ -141,6 +141,14 @@
         <label for="castEnabled" style="margin:0">Cast to Chromecast</label>
       </div>
       <div style="margin-top: 1rem; padding-top: 1rem; border-top: 1px solid #333;">
+        <label>Model Quality</label>
+        <select id="modelPreset" style="width: 100%; padding: 0.5rem; background: #0f0f23; color: #eee; border: 1px solid #333; border-radius: 4px; margin-top: 0.3rem;">
+          <option value="lite">Lite (fastest, lower quality)</option>
+          <option value="standard" selected>Standard (balanced)</option>
+          <option value="high">High Quality (slower, best results)</option>
+        </select>
+      </div>
+      <div style="margin-top: 1rem; padding-top: 1rem; border-top: 1px solid #333;">
         <label>Image Size (16:9)</label>
         <select id="imageSize" style="width: 100%; padding: 0.5rem; background: #0f0f23; color: #eee; border: 1px solid #333; border-radius: 4px; margin-top: 0.3rem;">
           <option value="640x360">640x360 (Lite)</option>
@@ -185,6 +193,7 @@
     const promptEl = document.getElementById('prompt');
     const deviceInput = document.getElementById('device');
     const castEnabled = document.getElementById('castEnabled');
+    const modelPresetSelect = document.getElementById('modelPreset');
     const imageSizeSelect = document.getElementById('imageSize');
     const recordDurationInput = document.getElementById('recordDuration');
     const intervalInput = document.getElementById('interval');
@@ -327,6 +336,7 @@
       formData.append('audio', wavBlob, 'recording.wav');
       formData.append('cast', castEnabled.checked ? 'true' : 'false');
       formData.append('device', deviceInput.value);
+      formData.append('preset', modelPresetSelect.value);
       formData.append('size', imageSizeSelect.value);
 
       try {

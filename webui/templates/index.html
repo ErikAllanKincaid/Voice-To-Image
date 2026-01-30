@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Voice to Image</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #1a1a2e;
+      color: #eee;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 2rem;
+    }
+    h1 { margin-bottom: 1.5rem; color: #a0c4ff; }
+    .container {
+      max-width: 600px;
+      width: 100%;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 1.5rem;
+    }
+    .record-btn {
+      width: 120px;
+      height: 120px;
+      border-radius: 50%;
+      border: 4px solid #a0c4ff;
+      background: #16213e;
+      color: #a0c4ff;
+      font-size: 1rem;
+      font-weight: bold;
+      cursor: pointer;
+      transition: all 0.2s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .record-btn:hover { background: #1a2744; transform: scale(1.05); }
+    .record-btn.recording {
+      border-color: #ff6b6b;
+      background: #4a1a1a;
+      color: #ff6b6b;
+      animation: pulse 1s infinite;
+    }
+    .record-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    @keyframes pulse {
+      0%, 100% { transform: scale(1); }
+      50% { transform: scale(1.05); }
+    }
+    .status {
+      text-align: center;
+      min-height: 3rem;
+      color: #888;
+    }
+    .status.error { color: #ff6b6b; }
+    .result {
+      width: 100%;
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      gap: 1rem;
+    }
+    .result.visible { display: flex; }
+    .result img {
+      max-width: 100%;
+      border-radius: 8px;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.4);
+    }
+    .meta {
+      background: #16213e;
+      padding: 1rem;
+      border-radius: 8px;
+      width: 100%;
+      font-size: 0.9rem;
+    }
+    .meta-label { color: #a0c4ff; font-weight: bold; margin-bottom: 0.3rem; }
+    .meta-value { color: #ccc; margin-bottom: 1rem; }
+    .meta-value:last-child { margin-bottom: 0; }
+    .options {
+      background: #16213e;
+      padding: 1rem;
+      border-radius: 8px;
+      width: 100%;
+    }
+    .options label { display: block; margin-bottom: 0.5rem; color: #a0c4ff; }
+    .options input[type="text"] {
+      width: 100%;
+      padding: 0.5rem;
+      border: 1px solid #333;
+      border-radius: 4px;
+      background: #0f0f23;
+      color: #eee;
+    }
+    .options .checkbox-row {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      margin-top: 0.5rem;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Voice to Image</h1>
+
+    <button id="recordBtn" class="record-btn">Hold to Record</button>
+    <div id="status" class="status">Press and hold the button to record</div>
+
+    <div class="options">
+      <label>Chromecast Device (optional)</label>
+      <input type="text" id="device" placeholder="e.g. Living Room TV">
+      <div class="checkbox-row">
+        <input type="checkbox" id="castEnabled">
+        <label for="castEnabled" style="margin:0">Cast to Chromecast</label>
+      </div>
+    </div>
+
+    <div id="result" class="result">
+      <img id="resultImg" src="" alt="Generated image">
+      <div class="meta">
+        <div class="meta-label">You said:</div>
+        <div class="meta-value" id="transcription"></div>
+        <div class="meta-label">Image prompt:</div>
+        <div class="meta-value" id="prompt"></div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const recordBtn = document.getElementById('recordBtn');
+    const status = document.getElementById('status');
+    const result = document.getElementById('result');
+    const resultImg = document.getElementById('resultImg');
+    const transcriptionEl = document.getElementById('transcription');
+    const promptEl = document.getElementById('prompt');
+    const deviceInput = document.getElementById('device');
+    const castEnabled = document.getElementById('castEnabled');
+
+    let mediaRecorder = null;
+    let audioChunks = [];
+    let isRecording = false;
+
+    async function startRecording() {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+        audioChunks = [];
+
+        mediaRecorder.ondataavailable = (e) => {
+          if (e.data.size > 0) audioChunks.push(e.data);
+        };
+
+        mediaRecorder.onstop = async () => {
+          stream.getTracks().forEach(t => t.stop());
+          if (audioChunks.length > 0) {
+            await processAudio();
+          }
+        };
+
+        mediaRecorder.start(100);
+        isRecording = true;
+        recordBtn.classList.add('recording');
+        recordBtn.textContent = 'Recording...';
+        status.textContent = 'Listening...';
+        status.classList.remove('error');
+      } catch (err) {
+        status.textContent = 'Microphone access denied';
+        status.classList.add('error');
+      }
+    }
+
+    function stopRecording() {
+      if (mediaRecorder && isRecording) {
+        mediaRecorder.stop();
+        isRecording = false;
+        recordBtn.classList.remove('recording');
+        recordBtn.textContent = 'Hold to Record';
+      }
+    }
+
+    async function processAudio() {
+      status.textContent = 'Processing...';
+      recordBtn.disabled = true;
+
+      // Convert webm to wav
+      const webmBlob = new Blob(audioChunks, { type: 'audio/webm' });
+      const wavBlob = await convertToWav(webmBlob);
+
+      const formData = new FormData();
+      formData.append('audio', wavBlob, 'recording.wav');
+      formData.append('cast', castEnabled.checked ? 'true' : 'false');
+      formData.append('device', deviceInput.value);
+
+      try {
+        const resp = await fetch('/api/pipeline', {
+          method: 'POST',
+          body: formData,
+        });
+
+        if (!resp.ok) {
+          const err = await resp.json();
+          throw new Error(err.error || 'Server error');
+        }
+
+        const imageBlob = await resp.blob();
+        const imageUrl = URL.createObjectURL(imageBlob);
+
+        resultImg.src = imageUrl;
+        transcriptionEl.textContent = resp.headers.get('X-Transcription') || '(unknown)';
+        promptEl.textContent = resp.headers.get('X-Prompt') || '(unknown)';
+        result.classList.add('visible');
+
+        status.textContent = 'Done!';
+      } catch (err) {
+        status.textContent = err.message;
+        status.classList.add('error');
+      } finally {
+        recordBtn.disabled = false;
+      }
+    }
+
+    async function convertToWav(webmBlob) {
+      const audioContext = new AudioContext({ sampleRate: 16000 });
+      const arrayBuffer = await webmBlob.arrayBuffer();
+      const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+
+      // Get mono channel
+      const channelData = audioBuffer.getChannelData(0);
+
+      // Create WAV
+      const wavBuffer = encodeWav(channelData, 16000);
+      return new Blob([wavBuffer], { type: 'audio/wav' });
+    }
+
+    function encodeWav(samples, sampleRate) {
+      const buffer = new ArrayBuffer(44 + samples.length * 2);
+      const view = new DataView(buffer);
+
+      // WAV header
+      writeString(view, 0, 'RIFF');
+      view.setUint32(4, 36 + samples.length * 2, true);
+      writeString(view, 8, 'WAVE');
+      writeString(view, 12, 'fmt ');
+      view.setUint32(16, 16, true);
+      view.setUint16(20, 1, true);
+      view.setUint16(22, 1, true);
+      view.setUint32(24, sampleRate, true);
+      view.setUint32(28, sampleRate * 2, true);
+      view.setUint16(32, 2, true);
+      view.setUint16(34, 16, true);
+      writeString(view, 36, 'data');
+      view.setUint32(40, samples.length * 2, true);
+
+      // Convert float32 to int16
+      let offset = 44;
+      for (let i = 0; i < samples.length; i++) {
+        const s = Math.max(-1, Math.min(1, samples[i]));
+        view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+        offset += 2;
+      }
+
+      return buffer;
+    }
+
+    function writeString(view, offset, string) {
+      for (let i = 0; i < string.length; i++) {
+        view.setUint8(offset + i, string.charCodeAt(i));
+      }
+    }
+
+    // Event listeners - hold to record
+    recordBtn.addEventListener('mousedown', startRecording);
+    recordBtn.addEventListener('mouseup', stopRecording);
+    recordBtn.addEventListener('mouseleave', stopRecording);
+    recordBtn.addEventListener('touchstart', (e) => { e.preventDefault(); startRecording(); });
+    recordBtn.addEventListener('touchend', stopRecording);
+
+    // Check server health on load
+    fetch('/api/health')
+      .then(r => r.json())
+      .then(data => {
+        if (data.status === 'ok') {
+          status.textContent = `Server ready (GPU: ${data.gpu ? 'yes' : 'no'})`;
+        }
+      })
+      .catch(() => {
+        status.textContent = 'Server not available - start it with: uv run python server.py';
+        status.classList.add('error');
+      });
+  </script>
+</body>
+</html>

@@ -20,6 +20,8 @@ dependencies = [
     "fastapi",
     "uvicorn[standard]",
     "python-multipart",
+    "flask",
+    "httpx",
 ]
 
 [project.scripts]

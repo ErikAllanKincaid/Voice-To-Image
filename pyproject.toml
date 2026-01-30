@@ -17,6 +17,9 @@ dependencies = [
     "ollama",
     "pillow",
     "keyboard",
+    "fastapi",
+    "uvicorn[standard]",
+    "python-multipart",
 ]
 
 [project.scripts]

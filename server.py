@@ -86,10 +86,10 @@ Output ONLY the prompt, nothing else. Keep it under 77 tokens."""
     return response["message"]["content"].strip()
 
 
-def generate_image(prompt: str) -> Image.Image:
+def generate_image(prompt: str, width: int = 768, height: int = 432) -> Image.Image:
     """Generate image using Stable Diffusion."""
     pipe = get_sd_pipe()
-    image = pipe(prompt, num_inference_steps=4, guidance_scale=0.0).images[0]
+    image = pipe(prompt, num_inference_steps=4, guidance_scale=0.0, width=width, height=height).images[0]
     return image
 
 
@@ -176,8 +176,14 @@ async def api_pipeline(
     audio: UploadFile = File(...),
     cast: bool = Form(False),
     device: str = Form(None),
+    size: str = Form("768x432"),
 ):
     """Full pipeline: audio → transcribe → refine → generate → (optional) cast."""
+    # Parse size
+    try:
+        width, height = map(int, size.split("x"))
+    except ValueError:
+        width, height = 768, 432
     content = await audio.read()
 
     # Parse WAV
@@ -204,7 +210,7 @@ async def api_pipeline(
         raise HTTPException(400, "No speech detected")
 
     prompt = refine_prompt(text)
-    image = generate_image(prompt)
+    image = generate_image(prompt, width=width, height=height)
 
     # Cast if requested
     if cast:

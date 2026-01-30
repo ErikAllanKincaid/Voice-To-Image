@@ -27,11 +27,12 @@ def pipeline():
     audio_file = request.files["audio"]
     cast = request.form.get("cast", "false") == "true"
     device = request.form.get("device", "")
+    size = request.form.get("size", "768x432")
 
     # Forward to server API
     try:
         files = {"audio": (audio_file.filename, audio_file.read(), audio_file.content_type)}
-        data = {"cast": str(cast).lower(), "device": device}
+        data = {"cast": str(cast).lower(), "device": device, "size": size}
 
         with httpx.Client(timeout=120.0) as client:
             resp = client.post(f"{API_URL}/pipeline", files=files, data=data)

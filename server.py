@@ -9,8 +9,8 @@ from pathlib import Path
 import numpy as np
 import ollama
 import torch
-import whisper
-from diffusers import StableDiffusionPipeline
+from faster_whisper import WhisperModel
+from diffusers.pipelines.stable_diffusion import StableDiffusionPipeline
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import Response
 from PIL import Image
@@ -19,7 +19,7 @@ from scipy.io import wavfile
 # Config
 WHISPER_MODEL = "base"
 OLLAMA_MODEL = "llama3.2"
-SD_MODEL = "stabilityai/stable-diffusion-2-1"
+SD_MODEL = "stabilityai/sd-turbo"
 SAMPLE_RATE = 16000
 
 app = FastAPI(title="Voice-to-Image API")
@@ -33,7 +33,10 @@ def get_whisper():
     global _whisper_model
     if _whisper_model is None:
         print("Loading Whisper model...")
-        _whisper_model = whisper.load_model(WHISPER_MODEL)
+        _whisper_model = WhisperModel(
+            WHISPER_MODEL,
+            device="cuda" if torch.cuda.is_available() else "cpu"
+        )
     return _whisper_model
 
 
@@ -51,10 +54,18 @@ def get_sd_pipe():
 
 
 def transcribe_audio(audio: np.ndarray) -> str:
-    """Transcribe audio using Whisper."""
+    """Transcribe audio using faster-whisper."""
+    # Save to temp WAV for faster-whisper
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+        wavfile.write(f.name, SAMPLE_RATE, (audio * 32767).astype(np.int16))
+        temp_path = f.name
+
     model = get_whisper()
-    result = model.transcribe(audio, fp16=torch.cuda.is_available())
-    return result["text"].strip()
+    segments, _ = model.transcribe(temp_path)
+    text = " ".join(seg.text for seg in segments).strip()
+
+    Path(temp_path).unlink()
+    return text
 
 
 def refine_prompt(text: str) -> str:
@@ -77,7 +88,7 @@ Output ONLY the prompt, nothing else. Keep it under 77 tokens."""
 def generate_image(prompt: str) -> Image.Image:
     """Generate image using Stable Diffusion."""
     pipe = get_sd_pipe()
-    image = pipe(prompt, num_inference_steps=30, guidance_scale=7.5).images[0]
+    image = pipe(prompt, num_inference_steps=4, guidance_scale=0.0).images[0]
     return image
 
 

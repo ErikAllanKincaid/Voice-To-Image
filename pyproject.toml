@@ -8,7 +8,7 @@ dependencies = [
     "sounddevice",
     "numpy",
     "scipy",
-    "openai-whisper",
+    "faster-whisper",
     "torch",
     "diffusers",
     "transformers",

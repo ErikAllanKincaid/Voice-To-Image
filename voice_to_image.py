@@ -11,8 +11,8 @@ import numpy as np
 import ollama
 import sounddevice as sd
 import torch
-import whisper
-from diffusers import StableDiffusionPipeline
+from faster_whisper import WhisperModel
+from diffusers.pipelines.stable_diffusion import StableDiffusionPipeline
 from PIL import Image
 from scipy.io import wavfile
 
@@ -21,7 +21,7 @@ SAMPLE_RATE = 16000
 RECORD_SECONDS = 5
 WHISPER_MODEL = "base"
 OLLAMA_MODEL = "llama3.2"
-SD_MODEL = "stabilityai/stable-diffusion-2-1"
+SD_MODEL = "stabilityai/sd-turbo"
 
 
 def record_audio(duration: float, sample_rate: int = SAMPLE_RATE) -> np.ndarray:
@@ -52,11 +52,19 @@ def record_push_to_talk(sample_rate: int = SAMPLE_RATE) -> np.ndarray:
 
 
 def transcribe(audio: np.ndarray, model_name: str = WHISPER_MODEL) -> str:
-    """Transcribe audio using Whisper."""
+    """Transcribe audio using faster-whisper."""
     print("Transcribing...")
-    model = whisper.load_model(model_name)
-    result = model.transcribe(audio, fp16=torch.cuda.is_available())
-    text = result["text"].strip()
+
+    # Save to temp WAV for faster-whisper
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+        wavfile.write(f.name, SAMPLE_RATE, (audio * 32767).astype(np.int16))
+        temp_path = f.name
+
+    model = WhisperModel(model_name, device="cuda" if torch.cuda.is_available() else "cpu")
+    segments, _ = model.transcribe(temp_path)
+    text = " ".join(seg.text for seg in segments).strip()
+
+    Path(temp_path).unlink()
     print(f"Transcription: {text}")
     return text
 
@@ -93,7 +101,7 @@ def generate_image(prompt: str, model_id: str = SD_MODEL) -> Image.Image:
     if torch.cuda.is_available():
         pipe = pipe.to("cuda")
 
-    image = pipe(prompt, num_inference_steps=30, guidance_scale=7.5).images[0]
+    image = pipe(prompt, num_inference_steps=4, guidance_scale=0.0).images[0]
 
     # Cleanup
     del pipe

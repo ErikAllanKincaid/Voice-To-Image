@@ -1,0 +1,23 @@
+[project]
+name = "voice-to-image"
+version = "0.1.0"
+description = "Voice-to-image pipeline: record speech, transcribe, generate image prompt, create image, cast to Chromecast"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "sounddevice",
+    "numpy",
+    "scipy",
+    "openai-whisper",
+    "torch",
+    "diffusers",
+    "transformers",
+    "accelerate",
+    "catt",
+    "ollama",
+    "pillow",
+    "keyboard",
+]
+
+[project.scripts]
+voice-to-image = "voice_to_image:main"

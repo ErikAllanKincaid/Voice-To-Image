@@ -10,7 +10,7 @@ import numpy as np
 import ollama
 import torch
 from faster_whisper import WhisperModel
-from diffusers.pipelines.stable_diffusion import StableDiffusionPipeline
+from diffusers import StableDiffusionPipeline, StableDiffusionXLPipeline
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import Response
 from PIL import Image
@@ -35,10 +35,10 @@ PRESETS = {
         "sd_steps": 4,
     },
     "high": {
-        "whisper": "medium",
+        "whisper": "base",
         "ollama": "llama3.2",
-        "sd": "stabilityai/stable-diffusion-xl-base-1.0",
-        "sd_steps": 30,
+        "sd": "stabilityai/sdxl-turbo",
+        "sd_steps": 4,
     },
 }
 DEFAULT_PRESET = "standard"
@@ -65,13 +65,25 @@ def get_sd_pipe(model_id: str = "stabilityai/sd-turbo"):
     global _sd_pipes
     if model_id not in _sd_pipes:
         print(f"Loading Stable Diffusion model: {model_id}...")
-        _sd_pipes[model_id] = StableDiffusionPipeline.from_pretrained(
+        # Use SDXL pipeline for SDXL models
+        pipeline_class = StableDiffusionXLPipeline if "xl" in model_id.lower() else StableDiffusionPipeline
+        _sd_pipes[model_id] = pipeline_class.from_pretrained(
             model_id,
             torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
         )
         if torch.cuda.is_available():
             _sd_pipes[model_id] = _sd_pipes[model_id].to("cuda")
     return _sd_pipes[model_id]
+
+
+def unload_whisper():
+    """Unload Whisper models to free VRAM before loading diffusion."""
+    global _whisper_models
+    import gc
+    _whisper_models.clear()
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
 
 
 def transcribe_audio(audio: np.ndarray, whisper_model: str = "base") -> str:
@@ -91,10 +103,12 @@ def transcribe_audio(audio: np.ndarray, whisper_model: str = "base") -> str:
 
 def refine_prompt(text: str, ollama_model: str = "llama3.2") -> str:
     """Use Ollama to convert speech to an image generation prompt."""
-    system = """You are a prompt engineer for image generation.
-Convert the user's spoken description into a concise, vivid image prompt.
-Focus on visual details: subject, style, lighting, colors, composition.
-Output ONLY the prompt, nothing else. Keep it under 77 tokens."""
+    system = """Convert to a Stable Diffusion prompt. STRICT LIMIT: 60 words max.
+
+Include: subject, style (cinematic/digital art/photorealistic), lighting, mood.
+Add: "highly detailed, 8k" at end.
+
+Be concise. No filler words. Output ONLY the prompt, nothing else."""
 
     response = ollama.chat(
         model=ollama_model,
@@ -102,6 +116,7 @@ Output ONLY the prompt, nothing else. Keep it under 77 tokens."""
             {"role": "system", "content": system},
             {"role": "user", "content": text},
         ],
+        keep_alive=0,  # Unload model immediately to free VRAM for diffusion
     )
     return response["message"]["content"].strip()
 
@@ -109,6 +124,11 @@ Output ONLY the prompt, nothing else. Keep it under 77 tokens."""
 def generate_image(prompt: str, width: int = 768, height: int = 432,
                    sd_model: str = "stabilityai/sd-turbo", sd_steps: int = 4) -> Image.Image:
     """Generate image using Stable Diffusion."""
+    # Truncate prompt to ~70 words to stay under CLIP's 77 token limit
+    words = prompt.split()
+    if len(words) > 70:
+        prompt = " ".join(words[:70])
+
     pipe = get_sd_pipe(sd_model)
     # sd-turbo uses guidance_scale=0, others use 7.5
     guidance = 0.0 if "turbo" in sd_model else 7.5
@@ -236,6 +256,9 @@ async def api_pipeline(
     if not text:
         raise HTTPException(400, "No speech detected")
 
+    # Free Whisper VRAM before loading diffusion model
+    unload_whisper()
+
     prompt = refine_prompt(text, ollama_model=config["ollama"])
     image = generate_image(prompt, width=width, height=height,
                            sd_model=config["sd"], sd_steps=config["sd_steps"])
@@ -249,6 +272,9 @@ async def api_pipeline(
     buf = io.BytesIO()
     image.save(buf, format="PNG")
     buf.seek(0)
+
+    # Free VRAM after generation (trade-off: slower next run, but frees 9GB)
+    unload_models()
 
     return Response(
         content=buf.getvalue(),
@@ -272,9 +298,11 @@ async def api_cast(image: UploadFile = File(...), device: str = Form(None)):
 @app.post("/unload")
 def unload_models():
     """Unload models to free VRAM."""
+    import gc
     global _whisper_models, _sd_pipes
     _whisper_models.clear()
     _sd_pipes.clear()
+    gc.collect()
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
     return {"status": "models unloaded"}

@@ -8,8 +8,11 @@ __pycache__/
 uv.lock
 
 # Test files
-test.wav
-test_output.png
+*.wav
+*_test.png
+*_test_*.png
+test_*.png
+test_*.py
 
 # Output
 outputs/

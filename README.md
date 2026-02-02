@@ -19,11 +19,20 @@ Speak a description, get an AI-generated image. Optionally cast to Chromecast.
 
 ## Setup
 
+### Install uv (Python package manager)
 ```bash
-# Install Ollama and pull model
-ollama pull llama3.2
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+See [uv documentation](https://docs.astral.sh/uv/) for other install methods.
 
-# Install dependencies
+### Install Ollama
+```bash
+curl -fsSL https://ollama.com/install.sh | sh
+ollama pull llama3.2
+```
+
+### Install dependencies
+```bash
 uv sync
 
 # Run the server

@@ -34,12 +34,23 @@ ollama pull llama3.2
 ### Install dependencies
 ```bash
 uv sync
+```
 
-# Run the server
+## Running
+
+Both servers must be running. The Web UI proxies requests to the API server.
+
+**Terminal 1 — API server (port 8765):**
+```bash
 uv run python server.py
 ```
 
-Server runs on port 8765.
+**Terminal 2 — Web UI (port 8766):**
+```bash
+uv run python webui/app.py
+```
+
+Access the Web UI at `http://localhost:8766`
 
 ## Pre-download Models
 
@@ -68,15 +79,11 @@ uv run hf download stabilityai/stable-diffusion-xl-base-1.0
 
 Models cache to `~/.cache/huggingface/hub/`.
 
-## Web UI
+## Web UI Notes
 
-```bash
-uv run python webui/app.py
-```
+Access from any device on local network at `http://<server-ip>:8766`.
 
-Web UI runs on port 8766. Access from any device on local network.
-
-**Note:** For remote mic access (not localhost), Chrome requires HTTPS or a flag:
+**Remote mic access:** Chrome requires HTTPS or a flag for non-localhost:
 ```
 chrome://flags/#unsafely-treat-insecure-origin-as-secure
 ```

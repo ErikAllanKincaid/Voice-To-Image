@@ -55,15 +55,15 @@ ollama pull llama3.2:1b  # for Lite preset
 ```bash
 uv pip install huggingface_hub
 
-uv run huggingface-cli download stabilityai/sd-turbo        # Lite/Standard, ~5GB
-uv run huggingface-cli download stabilityai/sdxl-turbo      # High preset, ~13GB
-uv run huggingface-cli download stabilityai/stable-diffusion-xl-base-1.0  # Ultra, ~13GB (requires login)
+uv run hf download stabilityai/sd-turbo        # Lite/Standard, ~5GB
+uv run hf download stabilityai/sdxl-turbo      # High preset, ~13GB
+uv run hf download stabilityai/stable-diffusion-xl-base-1.0  # Ultra, ~13GB (requires login)
 ```
 
 For authenticated models:
 ```bash
-uv run huggingface-cli login
-uv run huggingface-cli download stabilityai/stable-diffusion-xl-base-1.0
+uv run hf login
+uv run hf download stabilityai/stable-diffusion-xl-base-1.0
 ```
 
 Models cache to `~/.cache/huggingface/hub/`.

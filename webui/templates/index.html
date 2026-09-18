@@ -141,14 +141,29 @@
         <label for="castEnabled" style="margin:0">Cast to Chromecast</label>
       </div>
       <div style="margin-top: 1rem; padding-top: 1rem; border-top: 1px solid #333;">
-        <label>Model Quality</label>
+        <label>Preset (quick-set)</label>
         <select id="modelPreset" style="width: 100%; padding: 0.5rem; background: #0f0f23; color: #eee; border: 1px solid #333; border-radius: 4px; margin-top: 0.3rem;">
-          <option value="lite">Lite (fastest, ~4GB)</option>
-          <option value="standard" selected>Standard (~6GB)</option>
-          <option value="high">High - SDXL-Turbo (~10GB)</option>
-          <option value="ultra">Ultra - SDXL 30 steps (~24GB)</option>
-          <option value="flux">FLUX.1 (~24GB or 2x12GB)</option>
+          <option value="lite">Lite — sd-turbo, llama3.2:1b</option>
+          <option value="standard" selected>Standard — sd-turbo, llama3.2</option>
+          <option value="high">High — sdxl-turbo, qwen3.5:9b</option>
+          <option value="ultra">Ultra — sdxl-base 30 steps (24GB+)</option>
+          <option value="flux">FLUX.1 — schnell (24GB+ / 2×12GB)</option>
         </select>
+        <div style="display:flex; flex-direction:column; gap:0.6rem; margin-top:0.8rem;">
+          <div>
+            <label style="font-size:0.85rem;">STT (Whisper)</label>
+            <select id="whisperModel" style="width:100%; padding:0.4rem; background:#0f0f23; color:#eee; border:1px solid #333; border-radius:4px;"></select>
+          </div>
+          <div>
+            <label style="font-size:0.85rem;">LLM (prompt refiner)</label>
+            <select id="refineModel" style="width:100%; padding:0.4rem; background:#0f0f23; color:#eee; border:1px solid #333; border-radius:4px;"></select>
+          </div>
+          <div>
+            <label style="font-size:0.85rem;">Diffusion</label>
+            <select id="sdModel" style="width:100%; padding:0.4rem; background:#0f0f23; color:#eee; border:1px solid #333; border-radius:4px;"></select>
+          </div>
+        </div>
+        <div id="vramBadge" style="margin-top:0.6rem; font-size:0.8rem; color:#888;"></div>
       </div>
       <div style="margin-top: 1rem; padding-top: 1rem; border-top: 1px solid #333;">
         <label>Image Size (16:9)</label>
@@ -214,6 +229,8 @@
         <div class="meta-value" id="transcription"></div>
         <div class="meta-label">Image prompt:</div>
         <div class="meta-value" id="prompt"></div>
+        <div class="meta-label">Models (STT | LLM | diffusion):</div>
+        <div class="meta-value" id="modelsUsed"></div>
       </div>
     </div>
   </div>
@@ -226,11 +243,98 @@
     const resultImg = document.getElementById('resultImg');
     const transcriptionEl = document.getElementById('transcription');
     const promptEl = document.getElementById('prompt');
+    const modelsUsedEl = document.getElementById('modelsUsed');
     const deviceInput = document.getElementById('device');
     const castEnabled = document.getElementById('castEnabled');
     const modelPresetSelect = document.getElementById('modelPreset');
     const imageSizeSelect = document.getElementById('imageSize');
     const imageStyleSelect = document.getElementById('imageStyle');
+    const whisperModelSelect = document.getElementById('whisperModel');
+    const refineModelSelect = document.getElementById('refineModel');
+    const sdModelSelect = document.getElementById('sdModel');
+    const vramBadge = document.getElementById('vramBadge');
+
+    // --- Model selectors: populate from /api/models, quick-set from presets, VRAM pre-warning ---
+    let MODELS_INFO = null;
+    const SD_LABELS = {
+      'stabilityai/sd-turbo': 'SD-Turbo (~3 GB)',
+      'stabilityai/sdxl-turbo': 'SDXL-Turbo (~7.5 GB)',
+      'stabilityai/stable-diffusion-xl-base-1.0': 'SDXL-Base 30 steps (~9 GB)',
+      'black-forest-labs/FLUX.1-schnell': 'FLUX.1-schnell (~11 GB)',
+    };
+    const LLM_LABELS = {
+      'llama3.2:1b': 'llama3.2:1b (fastest)',
+      'llama3.2': 'llama3.2 (3B)',
+      'qwen3.5:9b': 'qwen3.5:9b (best, ~7 GB)',
+    };
+
+    function fillSelect(sel, values, labels) {
+      sel.innerHTML = '';
+      (values || []).forEach(v => {
+        const o = document.createElement('option');
+        o.value = v;
+        o.textContent = (labels && labels[v]) || v;
+        sel.appendChild(o);
+      });
+    }
+
+    function setIfPresent(sel, val) {
+      if ([...sel.options].some(o => o.value === val)) sel.value = val;
+    }
+
+    function applyPreset(name) {
+      const p = MODELS_INFO && MODELS_INFO.presets && MODELS_INFO.presets[name];
+      if (!p) return;
+      setIfPresent(whisperModelSelect, p.whisper);
+      setIfPresent(refineModelSelect, p.ollama);
+      setIfPresent(sdModelSelect, p.sd);
+    }
+
+    function maxStageEstimate() {
+      const est = (MODELS_INFO && MODELS_INFO.vram_estimate_mb) || {};
+      return Math.max(
+        est['whisper:' + whisperModelSelect.value] || 0,
+        est[refineModelSelect.value] || 0,
+        est[sdModelSelect.value] || 0
+      );
+    }
+
+    async function refreshVram() {
+      if (!MODELS_INFO) return;
+      let free = null, total = null;
+      try {
+        const d = await (await fetch('/api/vram')).json();
+        if (d.gpu) { free = d.free_mb; total = d.total_mb; }
+      } catch (e) { /* ignore */ }
+      const need = maxStageEstimate();
+      if (free === null) {
+        vramBadge.textContent = `Largest stage ~${need} MB · GPU status unknown`;
+        vramBadge.style.color = '#888';
+        return;
+      }
+      const base = `GPU ${free} / ${total} MB free · largest stage ~${need} MB`;
+      if (need > free) {
+        vramBadge.textContent = base + ' — may not fit (another job may be using the GPU)';
+        vramBadge.style.color = '#ff6b6b';
+      } else {
+        vramBadge.textContent = base;
+        vramBadge.style.color = '#77dd77';
+      }
+    }
+
+    async function populateModels() {
+      try {
+        MODELS_INFO = await (await fetch('/api/models')).json();
+      } catch (e) { return; }
+      fillSelect(whisperModelSelect, MODELS_INFO.whisper);
+      fillSelect(refineModelSelect, MODELS_INFO.ollama, LLM_LABELS);
+      fillSelect(sdModelSelect, MODELS_INFO.sd, SD_LABELS);
+      applyPreset(modelPresetSelect.value);
+      refreshVram();
+    }
+
+    modelPresetSelect.addEventListener('change', () => { applyPreset(modelPresetSelect.value); refreshVram(); });
+    [whisperModelSelect, refineModelSelect, sdModelSelect].forEach(s => s.addEventListener('change', refreshVram));
 
     // Style options for random selection (excludes "random" and "auto" options)
     const styleOptions = [
@@ -405,6 +509,9 @@
       formData.append('preset', modelPresetSelect.value);
       formData.append('size', imageSizeSelect.value);
       formData.append('style', getSelectedStyle());
+      formData.append('whisper_model', whisperModelSelect.value);
+      formData.append('refine_model', refineModelSelect.value);
+      formData.append('sd_model', sdModelSelect.value);
 
       try {
         const resp = await fetch('/api/pipeline', {
@@ -423,7 +530,9 @@
         resultImg.src = imageUrl;
         transcriptionEl.textContent = resp.headers.get('X-Transcription') || '(unknown)';
         promptEl.textContent = resp.headers.get('X-Prompt') || '(unknown)';
+        modelsUsedEl.textContent = resp.headers.get('X-Models') || '(unknown)';
         result.classList.add('visible');
+        refreshVram();
 
         status.textContent = 'Done!';
       } catch (err) {
@@ -513,6 +622,9 @@
         status.textContent = 'Server not available - start it with: uv run python server.py';
         status.classList.add('error');
       });
+
+    // Populate the model selectors
+    populateModels();
   </script>
 </body>
 </html>

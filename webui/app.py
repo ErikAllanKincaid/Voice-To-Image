@@ -30,17 +30,29 @@ def pipeline():
     preset = request.form.get("preset", "standard")
     size = request.form.get("size", "768x432")
     style = request.form.get("style", "")
+    whisper_model = request.form.get("whisper_model", "")
+    refine_model = request.form.get("refine_model", "")
+    sd_model = request.form.get("sd_model", "")
 
     # Forward to server API
     try:
         files = {"audio": (audio_file.filename, audio_file.read(), audio_file.content_type)}
-        data = {"cast": str(cast).lower(), "device": device, "preset": preset, "size": size, "style": style}
+        data = {
+            "cast": str(cast).lower(), "device": device, "preset": preset,
+            "size": size, "style": style,
+            "whisper_model": whisper_model, "refine_model": refine_model, "sd_model": sd_model,
+        }
 
         with httpx.Client(timeout=120.0) as client:
             resp = client.post(f"{API_URL}/pipeline", files=files, data=data)
 
         if resp.status_code != 200:
-            return jsonify({"error": resp.text}), resp.status_code
+            try:
+                body = resp.json()
+                msg = body.get("detail") or body.get("error") or resp.text
+            except Exception:
+                msg = resp.text
+            return jsonify({"error": msg}), resp.status_code
 
         # Return image with metadata from headers
         return send_file(
@@ -50,6 +62,7 @@ def pipeline():
         ), 200, {
             "X-Transcription": resp.headers.get("X-Transcription", ""),
             "X-Prompt": resp.headers.get("X-Prompt", ""),
+            "X-Models": resp.headers.get("X-Models", ""),
         }
 
     except httpx.ConnectError:
@@ -67,6 +80,28 @@ def health():
         return jsonify(resp.json())
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 503
+
+
+@app.route("/api/models")
+def models():
+    """Proxy the API server's model/preset options for the UI selectors."""
+    try:
+        with httpx.Client(timeout=10.0) as client:
+            resp = client.get(f"{API_URL}/models")
+        return jsonify(resp.json()), resp.status_code
+    except Exception as e:
+        return jsonify({"error": str(e)}), 503
+
+
+@app.route("/api/vram")
+def vram():
+    """Proxy the API server's GPU memory status for the UI pre-warning."""
+    try:
+        with httpx.Client(timeout=5.0) as client:
+            resp = client.get(f"{API_URL}/vram")
+        return jsonify(resp.json()), resp.status_code
+    except Exception as e:
+        return jsonify({"error": str(e)}), 503
 
 
 if __name__ == "__main__":

@@ -17,3 +17,6 @@ outputs/
 # IDE
 .vscode/
 .idea/
+
+# Local-only reference material (annotated copies, scratch)
+DO-NOT-COMMIT/

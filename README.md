@@ -80,7 +80,7 @@ uv pip install huggingface_hub
 
 uv run hf download stabilityai/sd-turbo        # Lite/Standard, ~5GB
 uv run hf download stabilityai/sdxl-turbo      # High preset, ~13GB
-uv run hf download stabilityai/stable-diffusion-xl-base-1.0  # Ultra, ~13GB (requires login)
+uv run hf download stabilityai/stable-diffusion-xl-base-1.0  # Ultra, ~20GB (requires login)
 ```
 
 For authenticated models:
@@ -169,55 +169,43 @@ DEFAULT_CHROMECAST = "Living Room TV"
 
 ## Docker
 
-Run Voice-to-Image in containers with GPU support. Includes Ollama sidecar.
+Run Voice-to-Image in a container with GPU support. Ollama is **not** bundled in the container — it runs as a host-level prerequisite here, exactly like it does for the native setup above (see **Setup**). Publishing Ollama's port from a sidecar container onto the host would collide with any Ollama already running there, and would load the same model into VRAM a second time alongside whatever else is using that GPU. Run `scripts/setup-ollama.sh` once on any target machine, regardless of its state, to get Ollama installed, running, and stocked with the required models.
 
-> **Status: not yet run end-to-end.** These files build cleanly by inspection but have not
-> been deployed to a real box. Before relying on them for a remote deploy, run through the
-> checklist below on the target machine and fix anything that breaks.
+> **Note:** Flux (needs a large, uncached download) and casting to a physical Chromecast both depend on things outside this repo's control (available disk/VRAM, a real device on the LAN) — test both against your actual target before relying on them.
 
 ### Deploy checklist (run on the target machine, once)
 1. `nvidia-container-toolkit` installed and `docker run --rm --gpus all nvidia/smi ...` shows the GPU.
-2. `docker compose up -d --build` — first run pulls the base image, builds the app image,
-   and has the `ollama` sidecar pull `llama3.2:1b`, `llama3.2`, and `qwen3.5:9b` (~11GB total).
-   This can take a long time on a slow link; watch `docker compose logs -f ollama` until all
-   three pulls finish before testing presets that need them.
-3. `curl http://localhost:8765/health` returns `{"status": "ok", "gpu": true}` — if `gpu` is
-   `false`, the container cannot see the GPU; recheck step 1.
-4. Open `http://<host>:8766`, run one generation per preset (Lite/Standard/High/Ultra/Flux)
-   to confirm each pulled Ollama model and diffusion model actually loads.
-5. `docker compose down` then `docker compose up -d` again — confirms the named volumes
-   (`v2i-cache`, `ollama-models`) actually persisted the downloaded weights, so a restart
-   does not re-download everything.
-6. If serving to devices on the LAN rather than `localhost`, see **Microphone access** above —
-   the Chrome flag / Firefox setting is still required over plain HTTP.
+2. `./scripts/setup-ollama.sh` — installs Ollama if missing, waits for it to be reachable at `localhost:11434`, and pulls `llama3.2:1b`, `llama3.2`, and `qwen3.5:9b` if not already present (~9.9GB combined on a machine with none of them yet).
+3. `docker compose up -d --build`.
+4. `curl http://localhost:8765/health` returns `{"status": "ok", "gpu": true}` — if `gpu` is `false`, the container cannot see the GPU; recheck step 1.
+5. Open `http://<host>:8766`, run one generation per preset (Lite/Standard/High/Ultra/Flux) to confirm each diffusion model downloads and loads (or predownload first — see the **Pre-download Models** section above, run as `docker compose exec voice-to-image hf download ...`).
+6. `docker compose down` then `docker compose up -d` again — confirms the named volume (`v2i-cache`) actually persisted the downloaded diffusion/Whisper weights, so a restart does not re-download everything.
+7. If serving to devices on the LAN rather than `localhost`, see **Microphone access** above — the Chrome flag / Firefox setting is still required over plain HTTP.
+8. If you plan to cast to a real Chromecast, test it now — casting depends on `catt`'s mDNS discovery reaching your LAN via `network_mode: host` (see the note in `docker-compose.yml`). A live test against your actual device is the only real confirmation that discovery works on your network.
 
 ### Quick Start (docker compose)
 ```bash
-# Requires nvidia-container-toolkit on host
+./scripts/setup-ollama.sh   # once, any machine state
 docker compose up -d
 # Access Web UI at http://localhost:8766
 # API at http://localhost:8765
 ```
 
-First run downloads models (Standard preset defaults):
-- Whisper base: ~150MB
-- SD-Turbo: ~3GB
-- llama3.2: ~2GB
-- qwen3.5:9b: ~7GB (only needed for High/Ultra/Flux presets)
+First run downloads diffusion/Whisper models on first use of each preset (Standard preset defaults): Whisper base ~150MB, SD-Turbo ~5GB. See **Pre-download Models** above to avoid a slow first request.
 
 ### Manual Docker
 ```bash
-# Build image
+# Ollama prerequisite (same as native setup)
+./scripts/setup-ollama.sh
+
+# Build and run
 docker build -t voice-to-image .
-
-# Run Ollama separately
-docker run -d --gpus all -v ollama:/root/.ollama -p 11434:11434 ollama/ollama
-docker exec -it <container> ollama pull llama3.2
-docker exec -it <container> ollama pull qwen3.5:9b  # for High/Ultra/Flux presets
-
-# Run Voice-to-Image
-docker run --gpus all -p 8765:8765 -p 8766:8766 \
-  -e OLLAMA_HOST=http://host.docker.internal:11434 \
+# --network host is used (Linux only) so Chromecast's mDNS/zeroconf device discovery
+# (catt) can see devices on the LAN -- Docker's default bridge network blocks it. With
+# host networking there is no -p mapping; the app binds 8765/8766 straight onto the host,
+# and OLLAMA_HOST is just localhost since Ollama runs natively on this same host.
+docker run --gpus all --network host \
+  -e OLLAMA_HOST=http://localhost:11434 \
   -v v2i-cache:/app/.cache \
   voice-to-image
 ```

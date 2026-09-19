@@ -1,0 +1,19 @@
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__
+*.pyc
+*.pyo
+.pytest_cache
+.venv
+uv.lock
+
+# Test files
+*.wav
+*.png
+test_*.py
+
+# Cache (downloaded at runtime)
+.cache/

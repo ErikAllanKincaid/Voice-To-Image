@@ -1,0 +1,157 @@
+# Voice-To-Image Kubernetes Deployment
+#
+# Prerequisites:
+# - NVIDIA GPU Operator installed
+# - Ollama deployed separately (or use the included ollama deployment)
+#
+# Deploy:
+#   kubectl apply -f k8s-deployment.yaml
+
+---
+# Ollama for LLM prompt refinement
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ollama
+  labels:
+    app: ollama
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ollama
+  template:
+    metadata:
+      labels:
+        app: ollama
+    spec:
+      containers:
+        - name: ollama
+          image: ollama/ollama:latest
+          ports:
+            - containerPort: 11434
+          volumeMounts:
+            - name: ollama-models
+              mountPath: /root/.ollama
+          resources:
+            limits:
+              nvidia.com/gpu: 1
+            requests:
+              memory: "4Gi"
+              cpu: "1"
+          # Pull every model referenced by server.py's OLLAMA_MODELS/PRESETS on startup
+          lifecycle:
+            postStart:
+              exec:
+                command: ["/bin/sh", "-c", "sleep 10 && ollama pull llama3.2:1b && ollama pull llama3.2 && ollama pull qwen3.5:9b"]
+      volumes:
+        - name: ollama-models
+          persistentVolumeClaim:
+            claimName: ollama-models
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ollama
+spec:
+  selector:
+    app: ollama
+  ports:
+    - port: 11434
+      targetPort: 11434
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ollama-models
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 15Gi  # llama3.2:1b + llama3.2 + qwen3.5:9b, ~11GB combined
+---
+# Voice-To-Image main service
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: v2i-cache
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 60Gi  # Whisper (~2GB) + sd-turbo (~5GB) + sdxl-turbo (~13GB) +
+                      # stable-diffusion-xl-base-1.0 (~20GB, not ~13GB as once assumed
+                      # here -- verified by disk usage). Add ~24GB more if using Flux.
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: voice-to-image
+  labels:
+    app: voice-to-image
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: voice-to-image
+  template:
+    metadata:
+      labels:
+        app: voice-to-image
+    spec:
+      containers:
+        - name: voice-to-image
+          image: voice-to-image:latest  # Replace with your registry
+          ports:
+            - containerPort: 8765
+              name: api
+            - containerPort: 8766
+              name: webui
+          env:
+            - name: OLLAMA_HOST
+              value: "http://ollama:11434"
+            - name: API_URL
+              value: "http://localhost:8765"
+          volumeMounts:
+            - name: cache
+              mountPath: /app/.cache
+          resources:
+            limits:
+              nvidia.com/gpu: 1
+            requests:
+              memory: "8Gi"
+              cpu: "2"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8765
+            initialDelaySeconds: 120
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8765
+            initialDelaySeconds: 60
+            periodSeconds: 10
+      volumes:
+        - name: cache
+          persistentVolumeClaim:
+            claimName: v2i-cache
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: voice-to-image
+spec:
+  selector:
+    app: voice-to-image
+  ports:
+    - name: api
+      port: 8765
+      targetPort: 8765
+    - name: webui
+      port: 80
+      targetPort: 8766
+  type: ClusterIP

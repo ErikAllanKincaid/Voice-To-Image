@@ -1,0 +1,50 @@
+# Voice-To-Image Docker Compose
+#
+# Start: docker compose up -d
+# Logs:  docker compose logs -f
+# Stop:  docker compose down
+#
+# Ollama is NOT bundled here. It runs the same way for Docker as it does for the plain
+# `uv run python server.py` setup in README.md: installed natively on the host, reachable
+# at localhost:11434, with llama3.2:1b / llama3.2 / qwen3.5:9b already pulled. Run
+# scripts/setup-ollama.sh once before `docker compose up` to get there regardless of the
+# machine's starting state -- do not assume it is already installed or already has the
+# right models. Bundling Ollama in its own container was tried and reverted: it forced
+# publishing port 11434 onto the host, which collides with any native Ollama already
+# running there, and it loads the same model into VRAM a second time alongside whatever
+# else is already using that GPU.
+#
+# network_mode: host (Linux only) is used because Chromecast casting is core to this
+# app, and catt's mDNS/zeroconf device discovery does not traverse Docker's default
+# bridge network. Host networking also means: no `ports:` mapping needed (the app binds
+# 8765/8766 straight onto the host), and OLLAMA_HOST below is just localhost.
+
+services:
+  voice-to-image:
+    build: .
+    image: voice-to-image:latest
+    container_name: voice-to-image
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      # Persist diffusion/Whisper model weights across restarts
+      - v2i-cache:/app/.cache
+    environment:
+      - OLLAMA_HOST=http://localhost:11434
+      - API_URL=http://localhost:8765
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8765/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+volumes:
+  v2i-cache:

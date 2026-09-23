@@ -169,7 +169,7 @@ DEFAULT_CHROMECAST = "Living Room TV"
 
 ## Docker
 
-Run Voice-to-Image in a container with GPU support. Ollama is **not** bundled in the container — it runs as a host-level prerequisite here, exactly like it does for the native setup above (see **Setup**). Publishing Ollama's port from a sidecar container onto the host would collide with any Ollama already running there, and would load the same model into VRAM a second time alongside whatever else is using that GPU. Run `scripts/setup-ollama.sh` once on any target machine, regardless of its state, to get Ollama installed, running, and stocked with the required models.
+Run Voice-to-Image in a container with GPU support. Ollama is **not** bundled in the container — it runs as a host-level prerequisite here, exactly like it does for the native setup above (see **Setup**). Publishing Ollama's port from a sidecar container onto the host would collide with any Ollama already running there, and would load the same model into VRAM a second time alongside whatever else is using that GPU. Run `scripts/setup-ollama.sh` once on any target machine, regardless of its state, to get Ollama installed, running, and stocked with the required models. Diffusion/Whisper weights are bind-mounted from the host's own `~/.cache/huggingface` rather than kept in a Docker-managed volume, so the **Pre-download Models** commands above work unchanged for a Docker deployment too, and any weights already cached there from the native setup are reused instead of redownloaded.
 
 > **Note:** Flux (needs a large, uncached download) and casting to a physical Chromecast both depend on things outside this repo's control (available disk/VRAM, a real device on the LAN) — test both against your actual target before relying on them.
 
@@ -178,8 +178,8 @@ Run Voice-to-Image in a container with GPU support. Ollama is **not** bundled in
 2. `./scripts/setup-ollama.sh` — installs Ollama if missing, waits for it to be reachable at `localhost:11434`, and pulls `llama3.2:1b`, `llama3.2`, and `qwen3.5:9b` if not already present (~9.9GB combined on a machine with none of them yet).
 3. `docker compose up -d --build`.
 4. `curl http://localhost:8765/health` returns `{"status": "ok", "gpu": true}` — if `gpu` is `false`, the container cannot see the GPU; recheck step 1.
-5. Open `http://<host>:8766`, run one generation per preset (Lite/Standard/High/Ultra/Flux) to confirm each diffusion model downloads and loads (or predownload first — see the **Pre-download Models** section above, run as `docker compose exec voice-to-image hf download ...`).
-6. `docker compose down` then `docker compose up -d` again — confirms the named volume (`v2i-cache`) actually persisted the downloaded diffusion/Whisper weights, so a restart does not re-download everything.
+5. Open `http://<host>:8766`, run one generation per preset (Lite/Standard/High/Ultra/Flux) to confirm each diffusion model downloads and loads (or predownload first — see **Pre-download Models** above, or run `docker compose run --rm voice-to-image hf download <repo>` if you would rather not install `uv` on this host).
+6. `docker compose down` then `docker compose up -d` again — confirms the app comes back up cleanly; the diffusion/Whisper weights themselves live in `~/.cache/huggingface` on the host, independent of the container's lifecycle, so a restart never re-downloads them.
 7. If serving to devices on the LAN rather than `localhost`, see **Microphone access** above — the Chrome flag / Firefox setting is still required over plain HTTP.
 8. If you plan to cast to a real Chromecast, test it now — casting depends on `catt`'s mDNS discovery reaching your LAN via `network_mode: host` (see the note in `docker-compose.yml`). A live test against your actual device is the only real confirmation that discovery works on your network.
 
@@ -206,7 +206,7 @@ docker build -t voice-to-image .
 # and OLLAMA_HOST is just localhost since Ollama runs natively on this same host.
 docker run --gpus all --network host \
   -e OLLAMA_HOST=http://localhost:11434 \
-  -v v2i-cache:/app/.cache \
+  -v ~/.cache/huggingface:/app/.cache/huggingface \
   voice-to-image
 ```
 

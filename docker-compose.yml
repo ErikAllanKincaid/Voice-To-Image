@@ -18,6 +18,12 @@
 # app, and catt's mDNS/zeroconf device discovery does not traverse Docker's default
 # bridge network. Host networking also means: no `ports:` mapping needed (the app binds
 # 8765/8766 straight onto the host), and OLLAMA_HOST below is just localhost.
+#
+# Diffusion/Whisper weights bind-mount the host's own ~/.cache/huggingface rather than
+# an isolated Docker-managed volume, for the same reason Ollama is a host prerequisite:
+# treat model weights as host-level state so a box that already has some or all of them
+# cached (from the native setup, or any other Hugging Face tool) does not redownload
+# anything, and so a `docker compose down -v` cannot delete them by accident.
 
 services:
   voice-to-image:
@@ -27,8 +33,7 @@ services:
     restart: unless-stopped
     network_mode: host
     volumes:
-      # Persist diffusion/Whisper model weights across restarts
-      - v2i-cache:/app/.cache
+      - ${HOME}/.cache/huggingface:/app/.cache/huggingface
     environment:
       - OLLAMA_HOST=http://localhost:11434
       - API_URL=http://localhost:8765
@@ -45,6 +50,3 @@ services:
       timeout: 10s
       retries: 3
       start_period: 60s
-
-volumes:
-  v2i-cache:

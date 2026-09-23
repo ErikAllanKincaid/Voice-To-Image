@@ -48,9 +48,11 @@ COPY webui/ webui/
 COPY entrypoint.sh .
 RUN chmod +x entrypoint.sh
 
-# Model cache directory (mount volume to persist)
+# Model cache directory. Bind-mounted to the host's own ~/.cache/huggingface in
+# docker-compose.yml, the same path the native (non-Docker) setup uses, so downloaded
+# weights are shared between deployment methods and survive independent of the container.
 ENV HF_HOME=/app/.cache/huggingface
-VOLUME /app/.cache
+VOLUME /app/.cache/huggingface
 
 # Expose both ports
 EXPOSE 8765 8766
